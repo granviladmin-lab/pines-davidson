@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Private Preview</title>
+<script>
+  // A site/ link opened before unlocking: send it to the password page, then back here.
+  const p = location.pathname, i = p.indexOf('/site/');
+  if (i >= 0) location.replace(p.slice(0, i + 1) + '?next=' + encodeURIComponent(p.slice(i + 1)));
+</script>
+</head>
+<body style="font-family:system-ui;padding:2rem">
+<p>Page not found.</p>
+</body>
+</html>
