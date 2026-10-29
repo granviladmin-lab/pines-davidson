@@ -27,18 +27,22 @@ async function secrets() {
   if (!key || !pathSalt) return null;
   return (cached = { key, pathSalt });
 }
-self.addEventListener('message', e => { if (e.data === 'lock') cached = null; });
+self.addEventListener('message', e => { if (e.data === 'lock') cached = last = null; });
 
 async function nameFor(path, pathSalt) {
   const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pathSalt + path));
   return [...new Uint8Array(h)].slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+let last = null; // repeat range requests for the same video skip re-decrypting
 async function load(path, s) {
+  if (last && last.path === path) return last.body;
   const r = await fetch(BASE + 'enc/' + (await nameFor(path, s.pathSalt)) + '.bin');
   if (!r.ok) return null;
   const buf = new Uint8Array(await r.arrayBuffer());
-  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, s.key, buf.slice(12));
+  const body = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, s.key, buf.slice(12));
+  if (/\.(mp4|webm)$/i.test(path)) last = { path, body };
+  return body;
 }
 
 function candidates(rel, search) {
@@ -63,7 +67,19 @@ async function handle(req, url) {
       return Response.redirect(url.pathname + '/', 301);
     }
     const ext = (path.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase();
-    return new Response(body, { headers: { 'Content-Type': TYPES[ext] || 'application/octet-stream' } });
+    const type = TYPES[ext] || 'application/octet-stream';
+    // Safari only plays video served as 206 byte ranges.
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('Range') || '');
+    if (m && (m[1] || m[2])) {
+      const size = body.byteLength;
+      let start = m[1] ? +m[1] : size - +m[2], end = m[1] && m[2] ? Math.min(+m[2], size - 1) : size - 1;
+      if (start < 0) start = 0;
+      if (start >= size) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+      return new Response(body.slice(start, end + 1), { status: 206, headers: {
+        'Content-Type': type, 'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Content-Length': String(end - start + 1), 'Accept-Ranges': 'bytes' } });
+    }
+    return new Response(body, { headers: { 'Content-Type': type, 'Accept-Ranges': 'bytes' } });
   }
   return new Response('<!doctype html><title>Not found</title><p style="font-family:system-ui;padding:2rem">This page wasn’t part of the saved copy. <a href="' + BASE + 'site/">Back to the start</a></p>', { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
